@@ -22,8 +22,8 @@ DRIVE_VIEW  = "https://drive.google.com/file/d/{}/view?usp=sharing"
 # ──────────────────────────────────────────────
 # Telegram
 # ──────────────────────────────────────────────
-BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-CHAT_ID   = os.environ["TELEGRAM_CHAT_ID"]
+BOT_TOKEN = os.environ["8871709663:AAGWxq2I5SqBCyCs9ViBZd3XotbNomFl1_M"]
+CHAT_ID   = os.environ["-5035178270"]
 
 def send_telegram(text: str):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
