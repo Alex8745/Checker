@@ -2,7 +2,7 @@ import hashlib
 import json
 import os
 import requests
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 # ──────────────────────────────────────────────
 # Файлы расписания (Google Drive, публичные)
@@ -95,7 +95,7 @@ def save_hashes(hashes: dict):
 # Основная логика
 # ──────────────────────────────────────────────
 def main():
-    now = datetime.now().strftime("%d.%m.%Y %H:%M")
+    now = datetime.now(timezone(timedelta(hours=5))).strftime("%d.%m.%Y %H:%M")
     print(f"[{now}] Проверка расписания...")
     print(f"Получатели: {', '.join(CHAT_IDS)}")
 
