@@ -112,15 +112,24 @@ def generate_11a_image(pdf_bytes: bytes, dpi: int = 150) -> bytes | None:
             target_cols = []
             header_row_idx = 0
             
-            # Ищем колонки, содержащие "11а"
+            # Ищем колонки, содержащие "11а" или "11a"
             for r_idx, row in enumerate(parsed_table):
                 for c_idx, cell in enumerate(row):
-                    if cell and "11а" in str(cell).lower().replace(" ", ""):
-                        target_cols.append(c_idx)
-                        # Захватываем соседнюю правую колонку (кабинеты)
-                        if c_idx + 1 < len(row):
-                            target_cols.append(c_idx + 1)
-                        header_row_idx = r_idx
+                    if cell:
+                        # Приводим к нижнему регистру, убираем пробелы
+                        cell_clean = str(cell).lower().replace(" ", "")
+                        
+                        # Заменяем латинскую 'a' на русскую 'а' для универсальности
+                        cell_clean = cell_clean.replace("a", "а")
+                        
+                        # Проверяем, есть ли там 11а (или просто 11, если написано раздельно)
+                        if "11а" in cell_clean or "11" in cell_clean:
+                            print(f"  [DEBUG] Найдено совпадение '{cell}' в строке {r_idx}, колонка {c_idx}")
+                            target_cols.append(c_idx)
+                            # Захватываем соседнюю правую колонку (кабинеты)
+                            if c_idx + 1 < len(row):
+                                target_cols.append(c_idx + 1)
+                            header_row_idx = r_idx
                 if target_cols:
                     break
                     
