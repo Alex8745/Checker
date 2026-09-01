@@ -13,7 +13,7 @@ from PIL import Image
 FILES = {
     "Понедельник": "1NxzC8xoYkOBZV1PmoQTgNgUHakDYYPFl",
     "Вторник":     "1lmZO9Ee6ivFnlS4Hy9d6xReFC_iySsjg",
-    "Среда":       "1Uue4I2nIhA8VB5WBd6bbJbG4U0tE9v3Q",
+    "Среда":       "1Ak2fXL5qAuqgBZVfi8ecj8SatXaUAbo5",
     "Четверг":     "1LYtbGmStSiJktyDEo3575Kq3LSWorL_b",
     "Пятница":     "1-iH0PDSIG2j72yOPVGply39IJd3_Vu77",
 }
