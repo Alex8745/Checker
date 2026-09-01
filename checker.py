@@ -122,8 +122,8 @@ def generate_11a_image(pdf_bytes: bytes, dpi: int = 150) -> bytes | None:
                         # Заменяем латинскую 'a' на русскую 'а' для универсальности
                         cell_clean = cell_clean.replace("а", "а")
                         
-                        # Проверяем, есть ли там 11а (или просто 11, если написано раздельно)
-                        if "11а" in cell_clean or "11" in cell_clean:
+                        # Проверяем, что это именно 11а (с буквой а или а в скобках/рядом), исключая просто цифры вроде 111
+                        if "11а" in cell_clean or "11a" in cell_clean or (cell_clean.startswith("11") and "а" in cell_clean):
                             print(f"  [DEBUG] Найдено совпадение '{cell}' в строке {r_idx}, колонка {c_idx}")
                             target_cols.append(c_idx)
                             # Захватываем соседнюю правую колонку (кабинеты)
