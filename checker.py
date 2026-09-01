@@ -117,7 +117,7 @@ def generate_11a_image(pdf_bytes: bytes, dpi: int = 150) -> bytes | None:
                 for c_idx, cell in enumerate(row):
                     if cell:
                         # Приводим к нижнему регистру, убираем пробелы
-                        cell_clean = str(cell).lower().replace(" ", "")
+                        cell_clean = str(cell).lower().replace(" ", "", "(208)МИ", "(208)ми")
                         
                         # Заменяем латинскую 'a' на русскую 'а' для универсальности
                         cell_clean = cell_clean.replace("a", "а")
