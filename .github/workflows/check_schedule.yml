@@ -27,11 +27,8 @@ jobs:
           python-version: "3.12"
 
       - name: Установка зависимостей
-        run: pip install requests pdf2image Pillow
+        run: pip install requests pdf2image Pillow pdfplumber
         
-        
-      - name: Установка зависимостей2
-        run: pip install -r requirements.txt pdfplumber
       
 
       - name: Запуск проверки расписания
