@@ -6,203 +6,96 @@ import requests
 from datetime import datetime, timezone, timedelta
 from pdf2image import convert_from_bytes
 from PIL import Image
+import pdfplumber  # <-- Добавлена библиотека для работы с PDF-таблицами
 
 # ──────────────────────────────────────────────
-# Файлы расписания (Google Drive, публичные)
+# Извлечение расписания конкретного класса из PDF
 # ──────────────────────────────────────────────
-FILES = {
-    "Понедельник": "1NxzC8xoYkOBZV1PmoQTgNgUHakDYYPFl",
-    "Вторник":     "1lmZO9Ee6ivFnlS4Hy9d6xReFC_iySsjg",
-    "Среда":       "1Ak2fXL5qAuqgBZVfi8ecj8SatXaUAbo5",
-    "Четверг":     "1LYtbGmStSiJktyDEo3575Kq3LSWorL_b",
-    "Пятница":     "1-iH0PDSIG2j72yOPVGply39IJd3_Vu77",
-}
-
-HASHES_FILE = "hashes.json"
-DRIVE_URL   = "https://drive.google.com/uc?export=download&id={}"
-DRIVE_VIEW  = "https://drive.google.com/file/d/{}/view?usp=sharing"
-
-BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-CHAT_IDS  = [cid.strip() for cid in os.environ["TELEGRAM_CHAT_ID"].split(",")]
-
-# ──────────────────────────────────────────────
-# Telegram: текстовое сообщение
-# ──────────────────────────────────────────────
-def send_telegram(text: str):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    for chat_id in CHAT_IDS:
-        try:
-            resp = requests.post(url, json={
-                "chat_id": chat_id,
-                "text": text,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": False,
-            }, timeout=10)
-            if resp.status_code == 200:
-                print(f"    ✓ Сообщение отправлено в {chat_id}")
-            else:
-                print(f"    ✗ Ошибка: {resp.text}")
-        except Exception as e:
-            print(f"    ✗ Исключение: {e}")
-
-# ──────────────────────────────────────────────
-# Telegram: одно цельное фото без сжатия
-# sendDocument сохраняет оригинальное качество
-# ──────────────────────────────────────────────
-def send_image(img_bytes: bytes, caption: str):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
-    for chat_id in CHAT_IDS:
-        try:
-            resp = requests.post(url, data={
-                "chat_id":    chat_id,
-                "caption":    caption,
-                "parse_mode": "HTML",
-            }, files={
-                "document": ("schedule.png", img_bytes, "image/png")
-            }, timeout=30)
-            if resp.status_code == 200:
-                print(f"    ✓ Фото отправлено в {chat_id}")
-            else:
-                print(f"    ✗ Ошибка в {chat_id}: {resp.text}")
-        except Exception as e:
-            print(f"    ✗ Исключение: {e}")
-
-# ──────────────────────────────────────────────
-# PDF → одно цельное PNG (все страницы склеены)
-# ──────────────────────────────────────────────
-def pdf_to_single_image(pdf_bytes: bytes, dpi: int = 150) -> bytes | None:
+def extract_class_schedule(pdf_bytes: bytes, target_class: str = "11А") -> str | None:
+    """
+    Извлекает расписание для указанного класса из PDF.
+    """
+    schedule_text = []
+    
     try:
-        pages = convert_from_bytes(pdf_bytes, dpi=dpi)
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            for page in pdf.pages:
+                tables = page.extract_tables()
+                for table in tables:
+                    if not table or len(table) < 2:
+                        continue
+                    
+                    # Ищем индекс колонки / строки с нашим классом
+                    # Очищаем заголовки от пробелов и переносов
+                    target_col_idx = -1
+                    header_row_idx = -1
+                    
+                    for r_idx, row in enumerate(table):
+                        for c_idx, cell in enumerate(row):
+                            if cell and target_class.lower() in str(cell).replace(" ", "").lower():
+                                header_row_idx = r_idx
+                                target_col_idx = c_idx
+                                break
+                        if target_col_idx != -1:
+                            break
+                    
+                    # Если нашли колоночный заголовок класса
+                    if target_col_idx != -1:
+                        for row in table[header_row_idx + 1:]:
+                            lesson_num = row[0] if len(row) > 0 and row[0] else ""
+                            lesson_name = row[target_col_idx] if len(row) > target_col_idx and row[target_col_idx] else ""
+                            
+                            if lesson_name and lesson_name.strip():
+                                # Чистим от лишних переносов строк
+                                clean_lesson = " ".join(lesson_name.split())
+                                clean_num = " ".join(str(lesson_num).split())
+                                
+                                if clean_num:
+                                    schedule_text.append(f"<b>{clean_num}.</b> {clean_lesson}")
+                                else:
+                                    schedule_text.append(f"• {clean_lesson}")
+                                    
+        if schedule_text:
+            return "\n".join(schedule_text)
+            
     except Exception as e:
-        print(f"  Ошибка конвертации PDF: {e}")
-        return None
-
-    if not pages:
-        return None
-
-    # Склеиваем страницы вертикально
-    width  = max(p.width for p in pages)
-    height = sum(p.height for p in pages)
-
-    combined = Image.new("RGB", (width, height), color=(255, 255, 255))
-    y = 0
-    for page in pages:
-        combined.paste(page, (0, y))
-        y += page.height
-
-    buf = io.BytesIO()
-    combined.save(buf, format="PNG", optimize=True)
-    buf.seek(0)
-    return buf.read()
+        print(f"Ошибка при парсинге PDF: {e}")
+        
+    return None
 
 # ──────────────────────────────────────────────
-# Скачать файл → (md5, bytes, content_type)
+# Изменения в функции main()
 # ──────────────────────────────────────────────
-def download_file(file_id: str):
-    session = requests.Session()
-    url = DRIVE_URL.format(file_id)
-
-    try:
-        resp = session.get(url, timeout=30, stream=True)
-        resp.raise_for_status()
-
-        content_type = resp.headers.get("Content-Type", "")
-
-        if "text/html" in content_type:
-            token = None
-            for key, val in resp.cookies.items():
-                if "download_warning" in key.lower():
-                    token = val
-                    break
-            if token:
-                resp = session.get(
-                    url, params={"confirm": token}, timeout=30, stream=True
-                )
-                resp.raise_for_status()
-                content_type = resp.headers.get("Content-Type", "")
-
-        md5    = hashlib.md5()
-        chunks = []
-        for chunk in resp.iter_content(chunk_size=8192):
-            md5.update(chunk)
-            chunks.append(chunk)
-
-        return md5.hexdigest(), b"".join(chunks), content_type
-
-    except Exception as e:
-        print(f"  Ошибка при скачивании {file_id}: {e}")
-        return None, None, None
-
-# ──────────────────────────────────────────────
-# Загрузить / сохранить хэши
-# ──────────────────────────────────────────────
-def load_hashes() -> dict:
-    if os.path.exists(HASHES_FILE):
-        with open(HASHES_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
-
-def save_hashes(hashes: dict):
-    with open(HASHES_FILE, "w", encoding="utf-8") as f:
-        json.dump(hashes, f, ensure_ascii=False, indent=2)
-
-# ──────────────────────────────────────────────
-# Основная логика
-# ──────────────────────────────────────────────
-def main():
-    tz  = timezone(timedelta(hours=5))
-    now = datetime.now(tz).strftime("%d.%m.%Y %H:%M")
-    print(f"[{now}] Проверка расписания...")
-    print(f"Получатели: {', '.join(CHAT_IDS)}")
-
-    old_hashes = load_hashes()
-    new_hashes = {}
-    changed    = []
-
-    for day, file_id in FILES.items():
-        print(f"  Проверяю: {day}...", end=" ")
-        md5, file_bytes, content_type = download_file(file_id)
-
-        if md5 is None:
-            print("ОШИБКА (пропуск)")
-            new_hashes[day] = old_hashes.get(day)
-            continue
-
-        new_hashes[day] = md5
-        old_md5 = old_hashes.get(day)
-
-        if old_md5 is None:
-            print(f"первый запуск ({md5[:8]})")
-        elif old_md5 != md5:
-            print(f"ИЗМЕНИЛСЯ ({old_md5[:8]} → {md5[:8]})")
-            changed.append((day, file_id, file_bytes))
-        else:
-            print(f"без изменений ({md5[:8]})")
+# В цикле отправки `for day, file_id, file_bytes in changed:` замените блок на такой:
 
     for day, file_id, file_bytes in changed:
-        link    = DRIVE_VIEW.format(file_id)
-        caption = (
-            f"📅 <b>Расписание обновлено!</b>\n\n"
-            f"День: <b>{day}</b>\n"
-            f"Время: {now}\n\n"
-            f"🔗 <a href=\"{link}\">Открыть оригинал</a>"
-        )
+        link = DRIVE_VIEW.format(file_id)
+        
+        # 1. Пробуем вытащить уроки 11А класса
+        class_schedule = extract_class_schedule(file_bytes, target_class="11А")
+        
+        if class_schedule:
+            text_caption = (
+                f"📅 <b>Расписание для 11А ({day})</b>\n"
+                f"🕒 Время обновления: {now}\n\n"
+                f"{class_schedule}\n\n"
+                f"🔗 <a href=\"{link}\">Открыть весь файл</a>"
+            )
+        else:
+            text_caption = (
+                f"📅 <b>Расписание обновлено!</b>\n\n"
+                f"День: <b>{day}</b>\n"
+                f"Время: {now}\n\n"
+                f"<i>(Не удалось автоматически извлечь 11А)</i>\n"
+                f"🔗 <a href=\"{link}\">Открыть оригинал</a>"
+            )
+            
         print(f"  → Конвертирую PDF в изображение: {day}")
         img_bytes = pdf_to_single_image(file_bytes, dpi=150)
 
         if img_bytes:
-            print(f"     Размер: {len(img_bytes) // 1024} КБ, отправляю...")
-            send_image(img_bytes, caption)
+            print(f"      Отправляю фото + текст...")
+            send_image(img_bytes, text_caption)
         else:
-            print(f"     Конвертация не удалась, отправляю ссылку")
-            send_telegram(caption)
-
-    save_hashes(new_hashes)
-
-    if not changed:
-        print("Изменений нет.")
-    else:
-        print(f"Итого обновлений: {len(changed)}")
-
-if __name__ == "__main__":
-    main()
+            print(f"      Отправляю только текст...")
+            send_telegram(text_caption)
