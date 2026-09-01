@@ -6,6 +6,7 @@ import requests
 from datetime import datetime, timezone, timedelta
 from pdf2image import convert_from_bytes
 from PIL import Image
+import pdfplumber
 
 # ──────────────────────────────────────────────
 # Файлы расписания (Google Drive, публичные)
@@ -46,8 +47,7 @@ def send_telegram(text: str):
             print(f"    ✗ Исключение: {e}")
 
 # ──────────────────────────────────────────────
-# Telegram: одно цельное фото без сжатия
-# sendDocument сохраняет оригинальное качество
+# Telegram: отправка изображения
 # ──────────────────────────────────────────────
 def send_image(img_bytes: bytes, caption: str):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
@@ -58,7 +58,7 @@ def send_image(img_bytes: bytes, caption: str):
                 "caption":    caption,
                 "parse_mode": "HTML",
             }, files={
-                "document": ("schedule.png", img_bytes, "image/png")
+                "document": ("schedule_11a.png", img_bytes, "image/png")
             }, timeout=30)
             if resp.status_code == 200:
                 print(f"    ✓ Фото отправлено в {chat_id}")
@@ -68,7 +68,7 @@ def send_image(img_bytes: bytes, caption: str):
             print(f"    ✗ Исключение: {e}")
 
 # ──────────────────────────────────────────────
-# PDF → одно цельное PNG (все страницы склеены)
+# Резервный метод: вся страница целиком
 # ──────────────────────────────────────────────
 def pdf_to_single_image(pdf_bytes: bytes, dpi: int = 150) -> bytes | None:
     try:
@@ -80,7 +80,6 @@ def pdf_to_single_image(pdf_bytes: bytes, dpi: int = 150) -> bytes | None:
     if not pages:
         return None
 
-    # Склеиваем страницы вертикально
     width  = max(p.width for p in pages)
     height = sum(p.height for p in pages)
 
@@ -89,6 +88,93 @@ def pdf_to_single_image(pdf_bytes: bytes, dpi: int = 150) -> bytes | None:
     for page in pages:
         combined.paste(page, (0, y))
         y += page.height
+
+    buf = io.BytesIO()
+    combined.save(buf, format="PNG", optimize=True)
+    buf.seek(0)
+    return buf.read()
+
+# ──────────────────────────────────────────────
+# Умный метод: поиск 11А, вырезание и склейка
+# ──────────────────────────────────────────────
+def generate_11a_image(pdf_bytes: bytes, dpi: int = 150) -> bytes | None:
+    scale = dpi / 72.0 
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            page = pdf.pages[0]
+            tables = page.find_tables()
+            if not tables:
+                return None
+            
+            table = tables[0]
+            parsed_table = page.extract_tables()[0]
+            
+            target_cols = []
+            header_row_idx = 0
+            
+            # Ищем колонки, содержащие "11а"
+            for r_idx, row in enumerate(parsed_table):
+                for c_idx, cell in enumerate(row):
+                    if cell and "11а" in str(cell).lower().replace(" ", ""):
+                        target_cols.append(c_idx)
+                        # Захватываем соседнюю правую колонку (кабинеты)
+                        if c_idx + 1 < len(row):
+                            target_cols.append(c_idx + 1)
+                        header_row_idx = r_idx
+                if target_cols:
+                    break
+                    
+            if not target_cols:
+                return None
+                
+            # Ищем последнюю заполненную строку для 11а (чтобы обрезать пустые уроки снизу)
+            last_valid_row = header_row_idx
+            for r_idx in range(header_row_idx + 1, len(parsed_table)):
+                row = parsed_table[r_idx]
+                has_content = any(row[c] and str(row[c]).strip() for c in target_cols if c < len(row))
+                if has_content:
+                    last_valid_row = r_idx
+                else:
+                    # Если пошли пустые строки подряд — прекращаем поиск
+                    break 
+                    
+            # Координаты сетки таблицы из pdfplumber
+            time_x0 = table.cells[header_row_idx][0][0]
+            time_x1 = table.cells[header_row_idx][1][2]
+            
+            class_x0 = table.cells[header_row_idx][min(target_cols)][0]
+            class_x1 = table.cells[header_row_idx][max(target_cols)][2]
+            
+            y0 = table.cells[header_row_idx][0][1]
+            y1 = table.cells[last_valid_row][0][3]
+            
+    except Exception as e:
+        print(f"  Ошибка при парсинге координат таблиц: {e}")
+        return None
+
+    # Конвертируем PDF в картинку высокого качества
+    try:
+        pages = convert_from_bytes(pdf_bytes, dpi=dpi)
+        img = pages[0]
+    except Exception as e:
+        print(f"  Ошибка конвертации страницы в картинку: {e}")
+        return None
+
+    # Пересчитываем координаты под DPI картинки
+    t_box = (int(time_x0 * scale), int(y0 * scale), int(time_x1 * scale), int(y1 * scale))
+    c_box = (int(class_x0 * scale), int(y0 * scale), int(class_x1 * scale), int(y1 * scale))
+
+    # Вырезаем нужные части
+    time_img = img.crop(t_box)
+    class_img = img.crop(c_box)
+
+    # Склеиваем их горизонтально рядом друг с другом
+    final_width = time_img.width + class_img.width
+    final_height = time_img.height
+    
+    combined = Image.new("RGB", (final_width, final_height), color=(255, 255, 255))
+    combined.paste(time_img, (0, 0))
+    combined.paste(class_img, (time_img.width, 0))
 
     buf = io.BytesIO()
     combined.save(buf, format="PNG", optimize=True)
@@ -182,20 +268,26 @@ def main():
     for day, file_id, file_bytes in changed:
         link    = DRIVE_VIEW.format(file_id)
         caption = (
-            f"📅 <b>Расписание обновлено!</b>\n\n"
+            f"📅 <b>Расписание 11А обновлено!</b>\n\n"
             f"День: <b>{day}</b>\n"
             f"Время: {now}\n\n"
             f"🔗 <a href=\"{link}\">Открыть оригинал</a>"
         )
-        print(f"  → Конвертирую PDF в изображение: {day}")
-        img_bytes = pdf_to_single_image(file_bytes, dpi=150)
+        print(f"  → Генерация компактного расписания 11А для: {day}")
+        
+        # Пробуем вырезать колонку 11А + звонки
+        img_bytes = generate_11a_image(file_bytes, dpi=150)
 
         if img_bytes:
-            print(f"     Размер: {len(img_bytes) // 1024} КБ, отправляю...")
+            print(f"    Размер вырезанного фото: {len(img_bytes) // 1024} КБ, отправляю...")
             send_image(img_bytes, caption)
         else:
-            print(f"     Конвертация не удалась, отправляю ссылку")
-            send_telegram(caption)
+            print(f"    Не удалось найти 11А, отправляю всю страницу целиком...")
+            img_bytes = pdf_to_single_image(file_bytes, dpi=150)
+            if img_bytes:
+                send_image(img_bytes, caption)
+            else:
+                send_telegram(caption)
 
     save_hashes(new_hashes)
 
