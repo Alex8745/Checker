@@ -120,7 +120,7 @@ def generate_11a_image(pdf_bytes: bytes, dpi: int = 150) -> bytes | None:
                         cell_clean = str(cell).lower().replace(" ", "")
                         
                         # Заменяем латинскую 'a' на русскую 'а' для универсальности
-                        cell_clean = cell_clean.replace("а", "а")
+                        cell_clean = cell_clean.replace("a", "а")
                         
                         # Проверяем, что это именно 11а (с буквой а или а в скобках/рядом), исключая просто цифры вроде 111
                         if "11а" in cell_clean or "11a" in cell_clean or (cell_clean.startswith("11") and "а" in cell_clean):
