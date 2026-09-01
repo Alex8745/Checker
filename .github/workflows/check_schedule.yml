@@ -28,6 +28,11 @@ jobs:
 
       - name: Установка зависимостей
         run: pip install requests pdf2image Pillow
+        
+        
+      - name: Установка зависимостей2
+        run: pip install -r requirements.txt pdfplumber
+      
 
       - name: Запуск проверки расписания
         env:
