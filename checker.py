@@ -15,7 +15,7 @@ FILES = {
     "Понедельник": "1NxzC8xoYkOBZV1PmoQTgNgUHakDYYPFl",
     "Вторник":     "1lmZO9Ee6ivFnlS4Hy9d6xReFC_iySsjg",
     "Среда":       "1Ak2fXL5qAuqgBZVfi8ecj8SatXaUAbo5",
-    "Четверг":     "1LYtbGmStSiJktyDEo3575Kq3LSWorL_b",
+    "Четверг":     "1rDKX9wzPA2cxPKATMnPPwnQshV4omsWK",
     "Пятница":     "1-iH0PDSIG2j72yOPVGply39IJd3_Vu77",
 }
 
