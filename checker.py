@@ -12,7 +12,7 @@ import pdfplumber
 # Файлы расписания (Google Drive, публичные)
 # ──────────────────────────────────────────────
 FILES = {
-    "Понедельник": "1NxzC8xoYkOBZV1PmoQTgNgUHakDYYPFl",
+    "Понедельник": "1vYT59M2NtWmHu6D7V0dnOkcE5aT9THAZ",
     "Вторник":     "1lmZO9Ee6ivFnlS4Hy9d6xReFC_iySsjg",
     "Среда":       "1Ak2fXL5qAuqgBZVfi8ecj8SatXaUAbo5",
     "Четверг":     "1rDKX9wzPA2cxPKATMnPPwnQshV4omsWK",
