@@ -171,10 +171,11 @@ def main():
         new_hashes[day] = md5
         old_md5 = old_hashes.get(day)
 
-        if old_md5 is None:
-            print(f"первый запуск ({md5[:8]})")
-        elif old_md5 != md5:
-            print(f"ИЗМЕНИЛСЯ ({old_md5[:8]} → {md5[:8]})")
+        if old_md5 != md5:
+            if old_md5 is None:
+                print(f"первый запуск / хэш не найден ({md5[:8]}) → отправляю")
+            else:
+                print(f"ИЗМЕНИЛСЯ ({old_md5[:8]} → {md5[:8]})")
             changed.append((day, file_id, file_bytes))
         else:
             print(f"без изменений ({md5[:8]})")
