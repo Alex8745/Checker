@@ -58,7 +58,7 @@ def send_image(img_bytes: bytes, caption: str):
                 "caption":    caption,
                 "parse_mode": "HTML",
             }, files={
-                "document": ("schedule.png", img_bytes, "image/png")
+                "document": ("РАСПИСАНИЕ.png", img_bytes, "image/png")
             }, timeout=30)
             if resp.status_code == 200:
                 print(f"    ✓ Фото отправлено в {chat_id}")
