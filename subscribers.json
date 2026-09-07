@@ -1,4 +1,9 @@
 {
-  "offset": 0,
-  "chats": {}
+  "offset": 525568747,
+  "chats": {
+    "8855889291": {
+      "username": "",
+      "first_name": "Alex"
+    }
+  }
 }
