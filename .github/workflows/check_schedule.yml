@@ -29,13 +29,12 @@ jobs:
       - name: Запуск проверки расписания
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python checker.py
 
-      - name: Сохранить обновлённые хэши
+      - name: Сохранить хэши и подписчиков
         run: |
           git config user.name  "schedule-bot"
           git config user.email "schedule-bot@users.noreply.github.com"
-          git add hashes.json
-          git diff --staged --quiet || git commit -m "chore: обновление хэшей расписания"
+          git add hashes.json subscribers.json
+          git diff --staged --quiet || git commit -m "chore: обновление хэшей и подписчиков"
           git push
