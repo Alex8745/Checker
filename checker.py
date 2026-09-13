@@ -6,29 +6,33 @@ import requests
 from datetime import datetime, timezone, timedelta
 from pdf2image import convert_from_bytes
 from PIL import Image
+from cryptography.fernet import Fernet
 
 # ──────────────────────────────────────────────
 # Файлы расписания (Google Drive, публичные)
 # ──────────────────────────────────────────────
 FILES = {
     "Понедельник": "1vYT59M2NtWmHu6D7V0dnOkcE5aT9THAZ",
-    "Вторник":     "1fYsQ2Izu3D5urH0eldwnInIFZy2e9qJ0",
+    "Вторник":     "1lmZO9Ee6ivFnlS4Hy9d6xReFC_iySsjg",
     "Среда":       "1Ak2fXL5qAuqgBZVfi8ecj8SatXaUAbo5",
     "Четверг":     "1rDKX9wzPA2cxPKATMnPPwnQshV4omsWK",
     "Пятница":     "1pSs0UFOmlqPoAMKJ53HGpe7tSZJtr2BD",
 }
 
 HASHES_FILE      = "hashes.json"
-SUBSCRIBERS_FILE = "subscribers.json"
+SUBSCRIBERS_FILE = "subscribers.enc"
 DRIVE_URL   = "https://drive.google.com/uc?export=download&id={}"
 DRIVE_VIEW  = "https://drive.google.com/file/d/{}/view?usp=sharing"
 
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+FERNET    = Fernet(os.environ["SUBSCRIBERS_KEY"].encode())
 
 WELCOME_TEXT = (
-    "✅ Ты подписан на уведомления об изменении расписания.\n"
-    "Как только оно поменяется — пришлю сюда обновлённую картинку.\n\n"
-    "Бот отправляет любое изменение файла расписания от администратора сайта.\n\n\n"
+    "👋 Привет! Я бот для отслеживания изменений расписания.\n\n"
+    "Слежу за файлами, которые загружает администратор, и присылаю сюда "
+    "обновлённую версию, как только она появляется.\n\n"
+    "⚠️ Обновления зависят от того, когда именно администратор меняет файлы на сайте — "
+    "поэтому дни могут приходить не по порядку недели.\n\n"
     "Чтобы отписаться — отправь /stop"
 )
 ALREADY_TEXT   = "Ты уже подписан на уведомления 🙂"
@@ -229,14 +233,16 @@ def save_hashes(hashes: dict):
 # ──────────────────────────────────────────────
 def load_subscribers() -> dict:
     if os.path.exists(SUBSCRIBERS_FILE):
-        with open(SUBSCRIBERS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+        with open(SUBSCRIBERS_FILE, "rb") as f:
+            decrypted = FERNET.decrypt(f.read())
+            return json.loads(decrypted)
     return {"offset": 0, "chats": {}}
 
 
 def save_subscribers(subs: dict):
-    with open(SUBSCRIBERS_FILE, "w", encoding="utf-8") as f:
-        json.dump(subs, f, ensure_ascii=False, indent=2)
+    data = json.dumps(subs, ensure_ascii=False).encode("utf-8")
+    with open(SUBSCRIBERS_FILE, "wb") as f:
+        f.write(FERNET.encrypt(data))
 
 
 # ──────────────────────────────────────────────
