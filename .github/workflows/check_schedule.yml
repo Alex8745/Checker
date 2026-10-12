@@ -49,7 +49,10 @@ jobs:
           fi
           git commit -m "chore: обновление хэшей и подписчиков"
           for i in 1 2 3; do
-            git pull --rebase origin main && git push && exit 0
+            if git pull --rebase -X theirs origin main && git push; then
+              exit 0
+            fi
+            git rebase --abort 2>/dev/null || true
             echo "Попытка $i не удалась, жду 5 секунд..."
             sleep 5
           done
