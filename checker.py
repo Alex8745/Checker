@@ -313,8 +313,9 @@ def main():
             broadcast_text(recipients, caption, subs)
 
     save_hashes(new_hashes)
-     if json.dumps(subs, sort_keys=True) != subs_snapshot:
-        save_subscribers(subs)  
+
+    if json.dumps(subs, sort_keys=True) != subs_snapshot:
+        save_subscribers(subs)
 
     if not changed:
         print("Изменений нет.")
