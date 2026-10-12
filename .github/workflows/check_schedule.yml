@@ -3,6 +3,10 @@ name: Проверка расписания
 on:
   workflow_dispatch:
 
+concurrency:
+  group: check-schedule
+  cancel-in-progress: false
+
 jobs:
   check:
     runs-on: ubuntu-latest
