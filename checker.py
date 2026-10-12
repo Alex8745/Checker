@@ -257,6 +257,7 @@ def main():
     print(f"[{now}] Проверка расписания...")
 
     subs = load_subscribers()
+    subs_snapshot = json.dumps(subs, sort_keys=True)
     process_telegram_updates(subs)
 
     recipients = list(subs["chats"].keys())
@@ -312,7 +313,8 @@ def main():
             broadcast_text(recipients, caption, subs)
 
     save_hashes(new_hashes)
-    save_subscribers(subs)  # сохраняем в любом случае — сдвинулся offset и/или список подписчиков
+     if json.dumps(subs, sort_keys=True) != subs_snapshot:
+        save_subscribers(subs)  
 
     if not changed:
         print("Изменений нет.")
