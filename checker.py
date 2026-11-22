@@ -1,12 +1,15 @@
 import hashlib
+import io
 import json
 import os
-import io
+import re
+import time
+from datetime import datetime, timedelta, timezone
+
+import fitz  # PyMuPDF
 import requests
-from datetime import datetime, timezone, timedelta
-from pdf2image import convert_from_bytes
-from PIL import Image
 from cryptography.fernet import Fernet
+from PIL import Image
 
 # ──────────────────────────────────────────────
 # Файлы расписания (Google Drive, публичные)
@@ -21,8 +24,8 @@ FILES = {
 
 HASHES_FILE      = "hashes.json"
 SUBSCRIBERS_FILE = "subscribers.enc"
-DRIVE_URL   = "https://drive.google.com/uc?export=download&id={}"
-DRIVE_VIEW  = "https://drive.google.com/file/d/{}/view?usp=sharing"
+DRIVE_URL        = "https://drive.google.com/uc?export=download&id={}"
+DRIVE_VIEW       = "https://drive.google.com/file/d/{}/view?usp=sharing"
 
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 FERNET    = Fernet(os.environ["SUBSCRIBERS_KEY"].encode())
@@ -38,72 +41,121 @@ WELCOME_TEXT = (
     "напрямую зависит от того, когда именно админ меняет файлы.\n\n"
     "Чтобы отписаться — отправь /stop"
 )
-ALREADY_TEXT   = "Ты уже подписан на уведомления 🙂"
-GOODBYE_TEXT   = "Ты отписан от уведомлений. Если захочешь вернуться — просто снова отправь /start"
-NOT_SUB_TEXT   = "Ты и так не был подписан."
+ALREADY_TEXT = "Ты уже подписан на уведомления 🙂"
+GOODBYE_TEXT = "Ты отписан от уведомлений. Если захошь вернуться — просто снова отправь /start"
+NOT_SUB_TEXT = "Ты и так не был подписан."
 
 
 # ──────────────────────────────────────────────
-# Telegram: сообщение / фото ОДНОМУ адресату
+# Telegram: отправка с повторами и обработкой 429
+# Возвращает: "ok" | "blocked" | "error"
 # ──────────────────────────────────────────────
-def send_telegram_to(chat_id: str, text: str) -> bool:
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    try:
-        resp = requests.post(url, json={
+def _post_telegram(
+    method: str,
+    *,
+    json_payload: dict | None = None,
+    data: dict | None = None,
+    files: dict | None = None,
+    timeout: int = 15,
+) -> str:
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
+    for attempt in range(3):
+        try:
+            resp = requests.post(
+                url,
+                json=json_payload,
+                data=data,
+                files=files,
+                timeout=timeout,
+            )
+            if resp.status_code == 200:
+                return "ok"
+            if resp.status_code == 403:
+                return "blocked"
+            if resp.status_code == 429:
+                try:
+                    retry_after = int(resp.json().get("parameters", {}).get("retry_after", 2))
+                except Exception:
+                    retry_after = 2
+                time.sleep(min(max(retry_after, 1), 15))
+                continue
+
+            print(f"    ✗ Ошибка Telegram API ({resp.status_code}): {resp.text}")
+            if resp.status_code >= 500:
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            return "error"
+        except Exception as e:
+            print(f"    ✗ Исключение при запросе {method}: {e}")
+            time.sleep(1.5 * (attempt + 1))
+    return "error"
+
+
+def send_telegram_to(chat_id: str, text: str) -> str:
+    return _post_telegram(
+        "sendMessage",
+        json_payload={
             "chat_id": chat_id,
             "text": text,
             "parse_mode": "HTML",
             "disable_web_page_preview": False,
-        }, timeout=10)
-        if resp.status_code == 200:
-            return True
-        print(f"    ✗ Ошибка отправки в {chat_id}: {resp.text}")
-        return resp.status_code != 403  # 403 = бот заблокирован, сигнал на удаление подписчика
-    except Exception as e:
-        print(f"    ✗ Исключение при отправке в {chat_id}: {e}")
-        return True  # не удаляем подписчика из-за временной сетевой ошибки
+        },
+        timeout=15,
+    )
 
 
-def send_image_to(chat_id: str, img_bytes: bytes, caption: str, filename: str) -> bool:
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
-    try:
-        resp = requests.post(url, data={
-            "chat_id":    chat_id,
-            "caption":    caption,
+def send_image_to(chat_id: str, img_bytes: bytes, caption: str, filename: str) -> str:
+    return _post_telegram(
+        "sendDocument",
+        data={
+            "chat_id": chat_id,
+            "caption": caption,
             "parse_mode": "HTML",
-        }, files={
-            "document": (filename, img_bytes, "image/png")
-        }, timeout=30)
-        if resp.status_code == 200:
-            return True
-        print(f"    ✗ Ошибка отправки фото в {chat_id}: {resp.text}")
-        return resp.status_code != 403
-    except Exception as e:
-        print(f"    ✗ Исключение при отправке фото в {chat_id}: {e}")
-        return True
+        },
+        files={
+            "document": (filename, img_bytes, "image/png"),
+        },
+        timeout=45,
+    )
 
 
 # ──────────────────────────────────────────────
 # Рассылка списку подписчиков (с самоочисткой)
 # ──────────────────────────────────────────────
-def broadcast_text(recipients: list, text: str, subs: dict):
+def broadcast_text(recipients: list, text: str, subs: dict) -> tuple[int, int, int]:
+    sent, blocked, errors = 0, 0, 0
     for chat_id in recipients:
-        ok = send_telegram_to(chat_id, text)
-        if ok:
+        status = send_telegram_to(chat_id, text)
+        if status == "ok":
+            sent += 1
             print(f"    ✓ Сообщение отправлено в {chat_id}")
-        else:
+        elif status == "blocked":
+            blocked += 1
             print(f"    ⚠ {chat_id} заблокировал бота — удаляю из подписчиков")
             subs["chats"].pop(chat_id, None)
+        else:
+            errors += 1
+            print(f"    ✗ Не удалось отправить сообщение в {chat_id}")
+        time.sleep(0.05)
+    return sent, blocked, errors
 
 
-def broadcast_image(recipients: list, img_bytes: bytes, caption: str, subs: dict, filename: str):
+def broadcast_image(recipients: list, img_bytes: bytes, caption: str, subs: dict, filename: str) -> tuple[int, int, int]:
+    sent, blocked, errors = 0, 0, 0
     for chat_id in recipients:
-        ok = send_image_to(chat_id, img_bytes, caption, filename)
-        if ok:
+        status = send_image_to(chat_id, img_bytes, caption, filename)
+        if status == "ok":
+            sent += 1
             print(f"    ✓ Фото отправлено в {chat_id}")
-        else:
+        elif status == "blocked":
+            blocked += 1
             print(f"    ⚠ {chat_id} заблокировал бота — удаляю из подписчиков")
             subs["chats"].pop(chat_id, None)
+        else:
+            errors += 1
+            print(f"    ✗ Не удалось отправить фото в {chat_id}")
+        time.sleep(0.05)
+    return sent, blocked, errors
 
 
 # ──────────────────────────────────────────────
@@ -111,55 +163,76 @@ def broadcast_image(recipients: list, img_bytes: bytes, caption: str, subs: dict
 # ──────────────────────────────────────────────
 def process_telegram_updates(subs: dict):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
-    try:
-        resp = requests.get(url, params={"offset": subs.get("offset", 0), "timeout": 0}, timeout=15)
-        resp.raise_for_status()
-        updates = resp.json().get("result", [])
-    except Exception as e:
-        print(f"  Ошибка получения обновлений Telegram: {e}")
-        return
+    while True:
+        try:
+            resp = requests.get(
+                url,
+                params={"offset": subs.get("offset", 0), "limit": 100, "timeout": 0},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            updates = resp.json().get("result", [])
+        except Exception as e:
+            print(f"  Ошибка получения обновлений Telegram: {e}")
+            return
 
-    for upd in updates:
-        subs["offset"] = upd["update_id"] + 1
+        if not updates:
+            break
 
-        msg = upd.get("message")
-        if not msg or "text" not in msg:
-            continue
+        for upd in updates:
+            subs["offset"] = upd["update_id"] + 1
 
-        chat_id = str(msg["chat"]["id"])
-        text    = msg["text"].strip()
+            msg = upd.get("message")
+            if not msg or "text" not in msg:
+                continue
 
-        if text == "/start":
-            if chat_id in subs["chats"]:
-                send_telegram_to(chat_id, ALREADY_TEXT)
-            else:
-                subs["chats"][chat_id] = {
-                    "username":   msg["chat"].get("username", ""),
-                    "first_name": msg["chat"].get("first_name", ""),
-                }
-                print(f"  ➕ Новый подписчик: {chat_id} ({subs['chats'][chat_id].get('username')})")
-                send_telegram_to(chat_id, WELCOME_TEXT)
+            raw_text = msg["text"].strip()
+            if not raw_text:
+                continue
 
-        elif text == "/stop":
-            if chat_id in subs["chats"]:
-                del subs["chats"][chat_id]
-                print(f"  ➖ Отписался: {chat_id}")
-                send_telegram_to(chat_id, GOODBYE_TEXT)
-            else:
-                send_telegram_to(chat_id, NOT_SUB_TEXT)
+            cmd = raw_text.split()[0].split("@")[0].lower()
+            chat_id = str(msg["chat"]["id"])
+
+            if cmd == "/start":
+                if chat_id in subs["chats"]:
+                    send_telegram_to(chat_id, ALREADY_TEXT)
+                else:
+                    subs["chats"][chat_id] = {
+                        "username":   msg["chat"].get("username", ""),
+                        "first_name": msg["chat"].get("first_name", ""),
+                    }
+                    print(f"  ➕ Новый подписчик: {chat_id} ({subs['chats'][chat_id].get('username')})")
+                    send_telegram_to(chat_id, WELCOME_TEXT)
+
+            elif cmd == "/stop":
+                if chat_id in subs["chats"]:
+                    del subs["chats"][chat_id]
+                    print(f"  ➖ Отписался: {chat_id}")
+                    send_telegram_to(chat_id, GOODBYE_TEXT)
+                else:
+                    send_telegram_to(chat_id, NOT_SUB_TEXT)
+
+        if len(updates) < 100:
+            break
 
 
 # ──────────────────────────────────────────────
-# PDF → одно цельное PNG (все страницы склеены)
+# PDF → одно цельное PNG (через PyMuPDF, без Poppler)
 # ──────────────────────────────────────────────
 def pdf_to_single_image(pdf_bytes: bytes, dpi: int = 150) -> bytes | None:
+    pages = []
     try:
-        pages = convert_from_bytes(pdf_bytes, dpi=dpi)
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+            if doc.page_count == 0:
+                return None
+            zoom = dpi / 72.0
+            matrix = fitz.Matrix(zoom, zoom)
+            for page in doc:
+                pix = page.get_pixmap(matrix=matrix, alpha=False)
+                img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+                pages.append(img)
     except Exception as e:
         print(f"  Ошибка конвертации PDF: {e}")
-        return None
-
-    if not pages:
         return None
 
     width  = max(p.width for p in pages)
@@ -185,9 +258,8 @@ def download_file(file_id: str):
     url = DRIVE_URL.format(file_id)
 
     try:
-        resp = session.get(url, timeout=30, stream=True)
+        resp = session.get(url, timeout=30)
         resp.raise_for_status()
-
         content_type = resp.headers.get("Content-Type", "")
 
         if "text/html" in content_type:
@@ -196,20 +268,22 @@ def download_file(file_id: str):
                 if "download_warning" in key.lower():
                     token = val
                     break
+            if not token:
+                match = re.search(r'name="confirm"\s+value="([^"]+)"', resp.text)
+                if match:
+                    token = match.group(1)
             if token:
-                resp = session.get(
-                    url, params={"confirm": token}, timeout=30, stream=True
-                )
+                resp = session.get(url, params={"confirm": token}, timeout=30)
                 resp.raise_for_status()
                 content_type = resp.headers.get("Content-Type", "")
 
-        md5    = hashlib.md5()
-        chunks = []
-        for chunk in resp.iter_content(chunk_size=8192):
-            md5.update(chunk)
-            chunks.append(chunk)
+        data = resp.content
+        if not data.startswith(b"%PDF-"):
+            print(f"  Файл {file_id} не является PDF (Content-Type: {content_type})")
+            return None, None, None
 
-        return md5.hexdigest(), b"".join(chunks), content_type
+        md5 = hashlib.md5(data).hexdigest()
+        return md5, data, content_type
 
     except Exception as e:
         print(f"  Ошибка при скачивании {file_id}: {e}")
@@ -260,8 +334,7 @@ def main():
     subs_snapshot = json.dumps(subs, sort_keys=True)
     process_telegram_updates(subs)
 
-    recipients = list(subs["chats"].keys())
-    print(f"Подписчиков: {len(recipients)}")
+    print(f"Подписчиков: {len(subs['chats'])}")
 
     old_hashes = load_hashes()
     new_hashes = {}
@@ -273,7 +346,8 @@ def main():
 
         if md5 is None:
             print("ОШИБКА (пропуск)")
-            new_hashes[day] = old_hashes.get(day)
+            if day in old_hashes:
+                new_hashes[day] = old_hashes[day]
             continue
 
         new_hashes[day] = md5
@@ -288,7 +362,7 @@ def main():
         else:
             print(f"без изменений ({md5[:8]})")
 
-    if changed and not recipients:
+    if changed and not subs["chats"]:
         print("  Расписание изменилось, но подписчиков пока нет — некому слать.")
 
     for day, file_id, file_bytes in changed:
@@ -302,15 +376,25 @@ def main():
         print(f"  → Конвертирую PDF в изображение: {day}")
         img_bytes = pdf_to_single_image(file_bytes, dpi=150)
 
-        if not recipients:
+        current_recipients = list(subs["chats"].keys())
+        if not current_recipients:
             continue
 
         if img_bytes:
             print(f"     Размер: {len(img_bytes) // 1024} КБ, отправляю...")
-            broadcast_image(recipients, img_bytes, caption, subs, filename=f"{day}.png")
+            sent_ok, _, errors = broadcast_image(
+                current_recipients, img_bytes, caption, subs, filename=f"{day}.png"
+            )
         else:
-            print(f"     Конвертация не удалась, отправляю ссылку")
-            broadcast_text(recipients, caption, subs)
+            print("     Конвертация не удалась, отправляю ссылку")
+            sent_ok, _, errors = broadcast_text(current_recipients, caption, subs)
+
+        if sent_ok == 0 and errors > 0:
+            print(f"     ⚠ Рассылка не удалась — откат хэша для {day}, повторю в следующий запуск.")
+            if day in old_hashes:
+                new_hashes[day] = old_hashes[day]
+            else:
+                new_hashes.pop(day, None)
 
     save_hashes(new_hashes)
 
